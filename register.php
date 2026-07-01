@@ -1,113 +1,128 @@
 <?php
-declare(strict_types=1);
+require_once "config.php";
 
-// Carrega configuração segura
-require_once "config_secure.php"; // Deve conter PDO com ERRMODE_EXCEPTION
-
-// Inicializa variáveis
+// Inicialização segura
 $username = "";
-$errors = [
-    "username" => "",
-    "password" => "",
-    "confirm"  => ""
-];
+$username_err = $password_err = $confirm_password_err = "";
 
-// Processa envio do formulário
+// Processamento do formulário
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
-    // Sanitização forte
-    $inputUsername = trim($_POST["username"] ?? "");
-    $inputPassword = $_POST["password"] ?? "";
-    $inputConfirm  = $_POST["confirm_password"] ?? "";
+    // Sanitização de entrada
+    $input_username = filter_input(INPUT_POST, "username", FILTER_SANITIZE_STRING);
+    $input_password = $_POST["password"] ?? "";
+    $input_confirm  = $_POST["confirm_password"] ?? "";
 
     // Validação de username
-    if ($inputUsername === "") {
-        $errors["username"] = "Informe um nome de usuário.";
-    } elseif (!preg_match('/^[a-zA-Z0-9_]{3,30}$/', $inputUsername)) {
-        $errors["username"] = "O nome de usuário deve conter apenas letras, números e _.";
+    if (empty($input_username)) {
+        $username_err = "Por favor, informe um nome de usuário.";
     } else {
-        // Verifica se já existe
-        $stmt = $pdo->prepare("SELECT id FROM users WHERE username = :u LIMIT 1");
-        $stmt->execute(["u" => $inputUsername]);
+        $sql = "SELECT id FROM users WHERE username = ?";
+        $stmt = mysqli_prepare($link, $sql);
 
-        if ($stmt->fetch()) {
-            $errors["username"] = "Este nome de usuário já está em uso.";
-        } else {
-            $username = $inputUsername;
+        if ($stmt) {
+            mysqli_stmt_bind_param($stmt, "s", $input_username);
+            mysqli_stmt_execute($stmt);
+            mysqli_stmt_store_result($stmt);
+
+            if (mysqli_stmt_num_rows($stmt) === 1) {
+                $username_err = "Este nome de usuário já está em uso.";
+            } else {
+                $username = $input_username;
+            }
+
+            mysqli_stmt_close($stmt);
         }
     }
 
     // Validação de senha
-    if ($inputPassword === "") {
-        $errors["password"] = "Informe uma senha.";
-    } elseif (strlen($inputPassword) < 10) {
-        // Política moderna OWASP: mínimo 10 caracteres
-        $errors["password"] = "A senha deve ter pelo menos 10 caracteres.";
+    if (empty($input_password)) {
+        $password_err = "Por favor, informe uma senha.";
+    } elseif (strlen($input_password) < 12) {
+        // OWASP recomenda mínimo de 12 caracteres
+        $password_err = "A senha deve ter pelo menos 12 caracteres.";
     } else {
-        // OK
+        // Não armazenar senhas em variáveis exibidas no HTML
+        $password = $input_password;
     }
 
-    // Confirmação de senha
-    if ($inputConfirm === "") {
-        $errors["confirm"] = "Confirme sua senha.";
-    } elseif ($inputPassword !== $inputConfirm) {
-        $errors["confirm"] = "As senhas não coincidem.";
+    // Confirmar senha
+    if (empty($input_confirm)) {
+        $confirm_password_err = "Por favor, confirme a senha.";
+    } elseif ($input_password !== $input_confirm) {
+        $confirm_password_err = "As senhas não coincidem.";
     }
 
-    // Se não houver erros, insere
-    if (!array_filter($errors)) {
+    // Se tudo estiver válido, inserir no banco
+    if (empty($username_err) && empty($password_err) && empty($confirm_password_err)) {
 
-        // Hash seguro (bcrypt ou argon2i/argon2id)
-        $hash = password_hash($inputPassword, PASSWORD_ARGON2ID);
+        $sql = "INSERT INTO users (username, password) VALUES (?, ?)";
+        $stmt = mysqli_prepare($link, $sql);
 
-        try {
-            $stmt = $pdo->prepare("
-                INSERT INTO users (username, password_hash, created_at)
-                VALUES (:u, :p, NOW())
-            ");
+        if ($stmt) {
+            // Hash seguro (bcrypt) — OWASP recomenda PASSWORD_DEFAULT
+            $hashed_password = password_hash($password, PASSWORD_DEFAULT);
 
-            $stmt->execute([
-                "u" => $username,
-                "p" => $hash
-            ]);
+            mysqli_stmt_bind_param($stmt, "ss", $username, $hashed_password);
 
-            // Redireciona
-            header("Location: login.php");
-            exit;
+            if (mysqli_stmt_execute($stmt)) {
+                header("Location: login.php");
+                exit;
+            } else {
+                error_log("Erro ao inserir usuário: " . mysqli_error($link));
+                echo "Ocorreu um erro. Tente novamente mais tarde.";
+            }
 
-        } catch (Exception $e) {
-            // Log seguro (NUNCA exibir detalhes ao usuário)
-            error_log("Erro ao registrar usuário: " . $e->getMessage());
-            echo "Ocorreu um erro. Tente novamente.";
+            mysqli_stmt_close($stmt);
         }
     }
+
+    mysqli_close($link);
 }
 ?>
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>Cadastro</title>
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.css">
+    <style>
+        body { font: 14px sans-serif; }
+        .wrapper { width: 350px; padding: 20px; }
+    </style>
+</head>
+<body>
+<div class="wrapper">
+    <h2>Cadastro</h2>
+    <p>Preencha o formulário para criar sua conta.</p>
 
+    <form action="<?= htmlspecialchars($_SERVER["PHP_SELF"]) ?>" method="post">
 
+        <div class="form-group <?= !empty($username_err) ? 'has-error' : '' ?>">
+            <label>Usuário</label>
+            <input type="text" name="username" class="form-control" value="<?= htmlspecialchars($username) ?>">
+            <span class="help-block"><?= $username_err ?></span>
+        </div>
 
-<form action="<?= htmlspecialchars($_SERVER["PHP_SELF"]) ?>" method="post">
-    <div class="form-group <?= $errors["username"] ? 'has-error' : '' ?>">
-        <label>Username</label>
-        <input type="text" name="username" class="form-control"
-               value="<?= htmlspecialchars($username) ?>">
-        <span class="help-block"><?= $errors["username"] ?></span>
-    </div>
+        <div class="form-group <?= !empty($password_err) ? 'has-error' : '' ?>">
+            <label>Senha</label>
+            <input type="password" name="password" class="form-control">
+            <span class="help-block"><?= $password_err ?></span>
+        </div>
 
-    <div class="form-group <?= $errors["password"] ? 'has-error' : '' ?>">
-        <label>Password</label>
-        <input type="password" name="password" class="form-control">
-        <span class="help-block"><?= $errors["password"] ?></span>
-    </div>
+        <div class="form-group <?= !empty($confirm_password_err) ? 'has-error' : '' ?>">
+            <label>Confirmar Senha</label>
+            <input type="password" name="confirm_password" class="form-control">
+            <span class="help-block"><?= $confirm_password_err ?></span>
+        </div>
 
-    <div class="form-group <?= $errors["confirm"] ? 'has-error' : '' ?>">
-        <label>Confirm Password</label>
-        <input type="password" name="confirm_password" class="form-control">
-        <span class="help-block"><?= $errors["confirm"] ?></span>
-    </div>
+        <div class="form-group">
+            <input type="submit" class="btn btn-primary" value="Cadastrar">
+            <input type="reset" class="btn btn-default" value="Limpar">
+        </div>
 
-    <div class="form-group">
-        <input type="submit" class="btn btn-primary" value="Submit">
-        <input type="reset" class="btn btn-default" value="Reset">
-    </div>
-</form>
+        <p>Já possui conta? <a href="login.php">Entrar</a>.</p>
+    </form>
+</div>
+</body>
+</html>
