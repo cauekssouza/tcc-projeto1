@@ -1,6 +1,4 @@
 <?php
-declare(strict_types=1);
-
 // Include config file
 require_once "config.php";
 
@@ -12,7 +10,7 @@ $username_err = $password_err = $confirm_password_err = "";
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     // Validate username
-    if (empty(trim((string)$_POST["username"]))) {
+    if (empty(trim($_POST["username"]))) {
         $username_err = "Please enter a username.";
     } else {
         // Prepare a select statement
@@ -20,10 +18,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         if ($stmt = mysqli_prepare($link, $sql)) {
             // Bind variables to the prepared statement as parameters
+            $param_username = (string)trim($_POST["username"]);
             mysqli_stmt_bind_param($stmt, "s", $param_username);
-
-            // Set parameters
-            $param_username = trim((string)$_POST["username"]);
 
             // Attempt to execute the prepared statement
             if (mysqli_stmt_execute($stmt)) {
@@ -47,20 +43,20 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     }
 
     // Validate password
-    if (empty(trim((string)$_POST["password"]))) {
+    if (empty(trim($_POST["password"]))) {
         $password_err = "Please enter a password.";
-    } elseif (strlen(trim((string)$_POST["password"])) < 6) {
+    } elseif (strlen(trim($_POST["password"])) < 6) {
         $password_err = "Password must have atleast 6 characters.";
     } else {
-        // keep only in memory for validation; will not be stored in clear text
-        $password = trim((string)$_POST["password"]);
+        // Do NOT persist plaintext password beyond validation
+        $password = (string)trim($_POST["password"]);
     }
 
     // Validate confirm password
-    if (empty(trim((string)$_POST["confirm_password"]))) {
+    if (empty(trim($_POST["confirm_password"]))) {
         $confirm_password_err = "Please confirm password.";
     } else {
-        $confirm_password = trim((string)$_POST["confirm_password"]);
+        $confirm_password = (string)trim($_POST["confirm_password"]);
         if (empty($password_err) && ($password !== $confirm_password)) {
             $confirm_password_err = "Password did not match.";
         }
@@ -74,19 +70,21 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
         if ($stmt = mysqli_prepare($link, $sql)) {
             // Bind variables to the prepared statement as parameters
-            mysqli_stmt_bind_param($stmt, "ss", $param_username, $param_password);
-
-            // Set parameters
             $param_username = (string)$username;
 
-            // Choose OWASP-compliant algorithm: Argon2id if available, otherwise PASSWORD_DEFAULT
-            $algo = defined('PASSWORD_ARGON2ID') ? PASSWORD_ARGON2ID : PASSWORD_DEFAULT;
-            $param_password = (string)password_hash($password, $algo);
+            // Use OWASP-compliant hashing: Argon2id if available, otherwise PASSWORD_DEFAULT
+            if (defined('PASSWORD_ARGON2ID')) {
+                $param_password = password_hash($password, PASSWORD_ARGON2ID);
+            } else {
+                $param_password = password_hash($password, PASSWORD_DEFAULT);
+            }
+
+            mysqli_stmt_bind_param($stmt, "ss", $param_username, $param_password);
 
             // Attempt to execute the prepared statement
             if (mysqli_stmt_execute($stmt)) {
                 // Redirect to login page
-                header("Location: login.php");
+                header("location: login.php");
                 exit;
             } else {
                 echo "Something went wrong. Please try again later.";
@@ -98,10 +96,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             mysqli_stmt_close($stmt);
         }
     }
-
-    // Clear sensitive data before rendering HTML to avoid leaking in the form
-    $password = "";
-    $confirm_password = "";
 
     // Close connection
     mysqli_close($link);
@@ -131,12 +125,14 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             </div>
             <div class="form-group <?php echo (!empty($password_err)) ? 'has-error' : ''; ?>">
                 <label>Password</label>
-                <input type="password" name="password" class="form-control" value="<?php echo htmlspecialchars($password, ENT_QUOTES, 'UTF-8'); ?>">
+                <!-- Não reexibir o valor do password para evitar vazamento de texto limpo -->
+                <input type="password" name="password" class="form-control" value="">
                 <span class="help-block"><?php echo $password_err; ?></span>
             </div>
             <div class="form-group <?php echo (!empty($confirm_password_err)) ? 'has-error' : ''; ?>">
                 <label>Confirm Password</label>
-                <input type="password" name="confirm_password" class="form-control" value="<?php echo htmlspecialchars($confirm_password, ENT_QUOTES, 'UTF-8'); ?>">
+                <!-- Não reexibir o valor do confirm_password -->
+                <input type="password" name="confirm_password" class="form-control" value="">
                 <span class="help-block"><?php echo $confirm_password_err; ?></span>
             </div>
             <div class="form-group">
