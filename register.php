@@ -1,59 +1,49 @@
 <?php
 declare(strict_types=1);
 
-// Include config file (garanta que $link seja um mysqli válido e com charset definido)
+// Include config file
 require_once __DIR__ . "/config.php";
 
-// Define charset da conexão (protege contra problemas de encoding)
-if ($link instanceof mysqli) {
-    $link->set_charset('utf8mb4');
-}
-
-// Inicia sessão (útil para mensagens, CSRF etc.)
+// Inicia sessão (útil para CSRF, mensagens, etc.)
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Gera token CSRF simples
-if (empty($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-}
+// Define variables and initialize with empty values
+$username = "";
+$password = "";
+$confirm_password = "";
 
-// Define variáveis e inicializa com valores vazios
-$username = $password = $confirm_password = "";
-$username_err = $password_err = $confirm_password_err = "";
+$username_err = "";
+$password_err = "";
+$confirm_password_err = "";
 
-// Processa dados do formulário quando enviado
+// Processing form data when form is submitted
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
-    // Verifica token CSRF
-    if (empty($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
-        die("Invalid request.");
-    }
-
-    // Sanitiza entrada básica
-    $raw_username = isset($_POST["username"]) ? trim($_POST["username"]) : "";
-    $raw_password = isset($_POST["password"]) ? $_POST["password"] : "";
-    $raw_confirm  = isset($_POST["confirm_password"]) ? $_POST["confirm_password"] : "";
+    // Sanitiza entrada
+    $raw_username = filter_input(INPUT_POST, 'username', FILTER_SANITIZE_STRING);
+    $raw_password = filter_input(INPUT_POST, 'password', FILTER_UNSAFE_RAW);
+    $raw_confirm_password = filter_input(INPUT_POST, 'confirm_password', FILTER_UNSAFE_RAW);
 
     // Validate username
-    if ($raw_username === "") {
+    if (empty($raw_username)) {
         $username_err = "Please enter a username.";
     } elseif (strlen($raw_username) < 3 || strlen($raw_username) > 50) {
         $username_err = "Username must be between 3 and 50 characters.";
-    } elseif (!preg_match('/^[a-zA-Z0-9_.-]+$/', $raw_username)) {
-        $username_err = "Username may only contain letters, numbers, dots, underscores and hyphens.";
     } else {
         // Prepare a select statement
-        $sql = "SELECT id FROM users WHERE username = ?";
+        $sql = "SELECT id FROM users WHERE username = ? LIMIT 1";
+
         $stmt = mysqli_prepare($link, $sql);
         if ($stmt === false) {
-            // Não exibir detalhes de erro ao usuário
-            $username_err = "An error occurred. Please try again later.";
+            // Logar erro internamente, não exibir detalhes ao usuário
+            $username_err = "Oops! Something went wrong. Please try again later.";
         } else {
-            $param_username = $raw_username;
-            mysqli_stmt_bind_param($stmt, "s", $param_username);
+            // Bind variables to the prepared statement as parameters
+            mysqli_stmt_bind_param($stmt, "s", $raw_username);
 
+            // Attempt to execute the prepared statement
             if (mysqli_stmt_execute($stmt)) {
                 mysqli_stmt_store_result($stmt);
 
@@ -63,7 +53,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     $username = $raw_username;
                 }
             } else {
-                $username_err = "An error occurred. Please try again later.";
+                $username_err = "Oops! Something went wrong. Please try again later.";
             }
 
             mysqli_stmt_close($stmt);
@@ -71,53 +61,56 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     }
 
     // Validate password
-    if ($raw_password === "") {
+    if (empty($raw_password)) {
         $password_err = "Please enter a password.";
     } elseif (strlen($raw_password) < 8) {
         $password_err = "Password must have at least 8 characters.";
     } else {
-        // Opcional: validar complexidade (maiúscula, minúscula, número, símbolo)
+        // Pode adicionar regras de complexidade aqui (números, letras, símbolos, etc.)
         $password = $raw_password;
     }
 
     // Validate confirm password
-    if ($raw_confirm === "") {
+    if (empty($raw_confirm_password)) {
         $confirm_password_err = "Please confirm password.";
     } else {
-        $confirm_password = $raw_confirm;
-        if ($password_err === "" && $password !== $confirm_password) {
+        $confirm_password = $raw_confirm_password;
+        if (empty($password_err) && $password !== $confirm_password) {
             $confirm_password_err = "Password did not match.";
         }
     }
 
     // Check input errors before inserting in database
-    if ($username_err === "" && $password_err === "" && $confirm_password_err === "") {
+    if (empty($username_err) && empty($password_err) && empty($confirm_password_err)) {
 
+        // Prepare an insert statement
         $sql = "INSERT INTO users (username, password) VALUES (?, ?)";
+
         $stmt = mysqli_prepare($link, $sql);
-
         if ($stmt === false) {
-            // Não revelar detalhes de erro
-            $password_err = "An error occurred. Please try again later.";
+            // Não expor detalhes de erro
+            $password_err = "Something went wrong. Please try again later.";
         } else {
-            $param_username = $username;
-            $param_password = password_hash($password, PASSWORD_DEFAULT);
+            // Bind variables to the prepared statement as parameters
+            $hashed_password = password_hash($password, PASSWORD_DEFAULT);
 
-            mysqli_stmt_bind_param($stmt, "ss", $param_username, $param_password);
+            mysqli_stmt_bind_param($stmt, "ss", $username, $hashed_password);
 
+            // Attempt to execute the prepared statement
             if (mysqli_stmt_execute($stmt)) {
-                // Regenera token CSRF após uso
-                $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+                // Regenera ID de sessão por segurança após cadastro
+                session_regenerate_id(true);
                 header("Location: login.php");
                 exit;
             } else {
-                $password_err = "An error occurred. Please try again later.";
+                $password_err = "Something went wrong. Please try again later.";
             }
 
             mysqli_stmt_close($stmt);
         }
     }
 
+    // Close connection
     mysqli_close($link);
 }
 ?>
@@ -137,7 +130,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         <h2>Sign Up</h2>
         <p>Please fill this form to create an account.</p>
         <form action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"], ENT_QUOTES, 'UTF-8'); ?>" method="post" autocomplete="off">
-            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token'], ENT_QUOTES, 'UTF-8'); ?>">
             <div class="form-group <?php echo (!empty($username_err)) ? 'has-error' : ''; ?>">
                 <label>Username</label>
                 <input type="text" name="username" class="form-control"
@@ -146,6 +138,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             </div>
             <div class="form-group <?php echo (!empty($password_err)) ? 'has-error' : ''; ?>">
                 <label>Password</label>
+                <!-- Nunca reexibir a senha digitada -->
                 <input type="password" name="password" class="form-control" value="">
                 <span class="help-block"><?php echo htmlspecialchars($password_err, ENT_QUOTES, 'UTF-8'); ?></span>
             </div>
