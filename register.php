@@ -1,15 +1,20 @@
 <?php
 declare(strict_types=1);
 
-// Include config file (garanta que $link seja um mysqli válido)
-require_once __DIR__ . '/config.php';
+// Include config file (garanta que $link seja um mysqli válido e com charset definido)
+require_once __DIR__ . "/config.php";
 
-// Inicia sessão (útil para CSRF, mensagens, etc.)
+// Define charset da conexão (protege contra problemas de encoding)
+if ($link instanceof mysqli) {
+    $link->set_charset('utf8mb4');
+}
+
+// Inicia sessão (útil para mensagens, CSRF etc.)
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Gera token CSRF se ainda não existir
+// Gera token CSRF simples
 if (empty($_SESSION['csrf_token'])) {
     $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
 }
@@ -22,19 +27,16 @@ $username_err = $password_err = $confirm_password_err = "";
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
     // Verifica token CSRF
-    if (
-        empty($_POST['csrf_token']) ||
-        !hash_equals($_SESSION['csrf_token'], (string)$_POST['csrf_token'])
-    ) {
+    if (empty($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
         die("Invalid request.");
     }
 
     // Sanitiza entrada básica
-    $raw_username = isset($_POST["username"]) ? trim((string)$_POST["username"]) : "";
-    $raw_password = isset($_POST["password"]) ? (string)$_POST["password"] : "";
-    $raw_confirm  = isset($_POST["confirm_password"]) ? (string)$_POST["confirm_password"] : "";
+    $raw_username = isset($_POST["username"]) ? trim($_POST["username"]) : "";
+    $raw_password = isset($_POST["password"]) ? $_POST["password"] : "";
+    $raw_confirm  = isset($_POST["confirm_password"]) ? $_POST["confirm_password"] : "";
 
-    // Valida username
+    // Validate username
     if ($raw_username === "") {
         $username_err = "Please enter a username.";
     } elseif (strlen($raw_username) < 3 || strlen($raw_username) > 50) {
@@ -42,11 +44,15 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     } elseif (!preg_match('/^[a-zA-Z0-9_.-]+$/', $raw_username)) {
         $username_err = "Username may only contain letters, numbers, dots, underscores and hyphens.";
     } else {
-        // Prepara statement de SELECT
-        $sql = "SELECT id FROM users WHERE username = ? LIMIT 1";
-
-        if ($stmt = mysqli_prepare($link, $sql)) {
-            mysqli_stmt_bind_param($stmt, "s", $raw_username);
+        // Prepare a select statement
+        $sql = "SELECT id FROM users WHERE username = ?";
+        $stmt = mysqli_prepare($link, $sql);
+        if ($stmt === false) {
+            // Não exibir detalhes de erro ao usuário
+            $username_err = "An error occurred. Please try again later.";
+        } else {
+            $param_username = $raw_username;
+            mysqli_stmt_bind_param($stmt, "s", $param_username);
 
             if (mysqli_stmt_execute($stmt)) {
                 mysqli_stmt_store_result($stmt);
@@ -57,31 +63,25 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                     $username = $raw_username;
                 }
             } else {
-                // Não exponha detalhes de erro ao usuário
-                $username_err = "Unable to validate username at the moment.";
+                $username_err = "An error occurred. Please try again later.";
             }
 
             mysqli_stmt_close($stmt);
-        } else {
-            $username_err = "Internal error. Please try again later.";
         }
     }
 
-    // Valida password
-    if (trim($raw_password) === "") {
+    // Validate password
+    if ($raw_password === "") {
         $password_err = "Please enter a password.";
     } elseif (strlen($raw_password) < 8) {
         $password_err = "Password must have at least 8 characters.";
-    } elseif (!preg_match('/[A-Z]/', $raw_password) ||
-              !preg_match('/[a-z]/', $raw_password) ||
-              !preg_match('/[0-9]/', $raw_password)) {
-        $password_err = "Password must contain upper, lower case letters and numbers.";
     } else {
+        // Opcional: validar complexidade (maiúscula, minúscula, número, símbolo)
         $password = $raw_password;
     }
 
-    // Valida confirmação de password
-    if (trim($raw_confirm) === "") {
+    // Validate confirm password
+    if ($raw_confirm === "") {
         $confirm_password_err = "Please confirm password.";
     } else {
         $confirm_password = $raw_confirm;
@@ -90,34 +90,34 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         }
     }
 
-    // Se não houver erros, insere no banco
+    // Check input errors before inserting in database
     if ($username_err === "" && $password_err === "" && $confirm_password_err === "") {
 
         $sql = "INSERT INTO users (username, password) VALUES (?, ?)";
+        $stmt = mysqli_prepare($link, $sql);
 
-        if ($stmt = mysqli_prepare($link, $sql)) {
-            $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+        if ($stmt === false) {
+            // Não revelar detalhes de erro
+            $password_err = "An error occurred. Please try again later.";
+        } else {
+            $param_username = $username;
+            $param_password = password_hash($password, PASSWORD_DEFAULT);
 
-            mysqli_stmt_bind_param($stmt, "ss", $username, $hashed_password);
+            mysqli_stmt_bind_param($stmt, "ss", $param_username, $param_password);
 
             if (mysqli_stmt_execute($stmt)) {
                 // Regenera token CSRF após uso
                 $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-                // Redireciona para login
                 header("Location: login.php");
                 exit;
             } else {
-                // Mensagem genérica
-                $password_err = "Unable to create account at the moment.";
+                $password_err = "An error occurred. Please try again later.";
             }
 
             mysqli_stmt_close($stmt);
-        } else {
-            $password_err = "Internal error. Please try again later.";
         }
     }
 
-    // Fecha conexão
     mysqli_close($link);
 }
 ?>
@@ -126,11 +126,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 <head>
     <meta charset="UTF-8">
     <title>Sign Up</title>
-    <link rel="stylesheet"
-          href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.css">
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.css">
     <style type="text/css">
         body{ font: 14px sans-serif; }
-        .wrapper{ width: 350px; padding: 20px; margin: 0 auto; }
+        .wrapper{ width: 350px; padding: 20px; margin: 0 auto; margin-top: 40px; }
     </style>
 </head>
 <body>
